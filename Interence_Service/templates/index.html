@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+   <html>
+   <head>
+       <meta charset="UTF-8">
+       <title>Allergy Scanner</title>
+   </head>
+   <body>
+       <h1>SafeEat Korea</h1>
+       <!-- 서버의 /analyze 주소로 이미지 보냄 -->
+       <form action="/analyze" method="post" enctype="multipart/form-data">
+           <input type="file" name="file" accept="image/*" capture="camera" required>
+           <button type="submit">Scan & Analyze</button>
+       </form>
+   </body>
+   </html>
