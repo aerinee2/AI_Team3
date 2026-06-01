@@ -1,17 +1,124 @@
 <!DOCTYPE html>
-   <html>
-   <head>
-       <meta charset="UTF-8">
-       <title>Result</title>
-   </head>
-   <body>
-       <h1>Analysis Result</h1>
-       <h3>Detected Text:</h3>
-       <p>{{ detected_text }}</p>
-       
-       <h3>Allergy Info:</h3>
-       <p>{{ analysis }}</p>
-       
-       <a href="/">Go Back</a>
-   </body>
-   </html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SafeEat — Result</title>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --surface: #141414;
+            --border: #222;
+            --accent: #00e5a0;
+            --accent-dim: rgba(0, 229, 160, 0.10);
+            --warn: #ff5c5c;
+            --warn-dim: rgba(255, 92, 92, 0.10);
+            --text: #f0f0f0;
+            --muted: #666;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: var(--bg); color: var(--text);
+            font-family: 'DM Sans', sans-serif;
+            min-height: 100vh; display: flex;
+            flex-direction: column; align-items: center;
+            justify-content: center; padding: 24px;
+        }
+        body::before {
+            content: ''; position: fixed; inset: 0;
+            background-image:
+                linear-gradient(rgba(0,229,160,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,229,160,0.03) 1px, transparent 1px);
+            background-size: 40px 40px; pointer-events: none;
+        }
+        .container { width: 100%; max-width: 480px; position: relative; z-index: 1; }
+        .header { text-align: center; margin-bottom: 32px; animation: fadeDown 0.5s ease both; }
+        .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 1.6rem; }
+        .logo span { color: var(--accent); }
+        .status-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 8px 18px; border-radius: 999px;
+            font-family: 'Syne', sans-serif; font-size: 0.85rem; font-weight: 700;
+            letter-spacing: 0.04em; margin-bottom: 24px;
+            animation: fadeDown 0.5s ease 0.05s both;
+        }
+        .status-badge.warn { background: var(--warn-dim); border: 1px solid var(--warn); color: var(--warn); }
+        .status-badge.safe { background: var(--accent-dim); border: 1px solid var(--accent); color: var(--accent); }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 28px; margin-bottom: 16px; animation: fadeUp 0.5s ease both; }
+        .card:nth-child(2) { animation-delay: 0.1s; }
+        .card:nth-child(3) { animation-delay: 0.2s; }
+        .card.warn-card { border-color: rgba(255,92,92,0.4); background: var(--warn-dim); }
+        .card.safe-card { border-color: rgba(0,229,160,0.4); background: var(--accent-dim); }
+        .card-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin-bottom: 12px; }
+        .card-title { font-family: 'Syne', sans-serif; font-size: 1rem; font-weight: 700; margin-bottom: 10px; }
+        .card-title.warn { color: var(--warn); }
+        .card-title.safe { color: var(--accent); }
+        .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .tag { background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; font-size: 0.82rem; }
+        .tag.korean { color: var(--muted); font-size: 0.75rem; }
+        .analysis-text { font-size: 0.95rem; line-height: 1.65; white-space: pre-line; }
+        .btn-back {
+            display: block; width: 100%; padding: 15px;
+            background: transparent; color: var(--text);
+            border: 1px solid var(--border); border-radius: 12px;
+            font-family: 'Syne', sans-serif; font-size: 0.95rem; font-weight: 700;
+            text-align: center; text-decoration: none;
+            transition: all 0.2s ease; margin-top: 8px;
+            animation: fadeUp 0.5s ease 0.3s both;
+        }
+        .btn-back:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+        .note { text-align: center; margin-top: 20px; font-size: 0.72rem; color: var(--muted); line-height: 1.6; animation: fadeUp 0.5s ease 0.35s both; }
+        @keyframes fadeDown { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">Safe<span>Eat</span> Korea</div>
+        </div>
+
+        {% if "WARNING" in analysis %}
+            <div style="text-align:center"><div class="status-badge warn">⚠️ Allergen Detected</div></div>
+        {% else %}
+            <div style="text-align:center"><div class="status-badge safe">✅ Looks Safe</div></div>
+        {% endif %}
+
+        {% if "WARNING" in analysis %}
+        <div class="card warn-card">
+            <div class="card-label">Allergy Alert</div>
+            <div class="card-title warn">⚠️ Warning</div>
+            <p class="analysis-text">{{ analysis }}</p>
+        </div>
+        {% else %}
+        <div class="card safe-card">
+            <div class="card-label">Allergy Alert</div>
+            <div class="card-title safe">✅ No Allergens Found</div>
+            <p class="analysis-text">{{ analysis }}</p>
+        </div>
+        {% endif %}
+
+        <div class="card">
+            <div class="card-label">Detected Ingredients — English</div>
+            <div class="tags">
+                {% for ingredient in detected_text.split(', ') %}
+                    <span class="tag">{{ ingredient }}</span>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">원재료명 — Korean</div>
+            <div class="tags">
+                {% for ingredient in detected_text_korean.split(', ') %}
+                    <span class="tag korean">{{ ingredient }}</span>
+                {% endfor %}
+            </div>
+        </div>
+
+        <a href="/" class="btn-back">← Scan Another Product</a>
+        <p class="note">For reference only. Always consult a medical professional<br>for allergy-related health decisions.</p>
+    </div>
+</body>
+</html>
