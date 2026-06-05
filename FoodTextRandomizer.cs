@@ -5,7 +5,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Perception.Randomization.Randomizers;
 using TMPro;
-using System.IO;
+using UnityEngine.Perception.Randomization.Scenarios;
 
 [Serializable]
 public class FoodTextRandomizer : Randomizer
@@ -35,8 +35,14 @@ public class FoodTextRandomizer : Randomizer
     public float minWidth = 350f;
     public float maxWidth = 800f;
 
-    //  실전 데이터 증강용 원산지 목록
     private string[] randomCountries = { "국산", "외국산", "미국산", "네덜란드산", "말레이시아산", "중국산", "호주산", "독일산" };
+
+    [Header("방해용 UI 프리팹 설정")]
+    public GameObject barcodePrefab;
+    public GameObject noiseTitlePrefab;
+
+    [Header("배경 도형 설정")]
+    public int shapeCount =100;
 
     protected override void OnIterationStart()
     {
@@ -73,12 +79,8 @@ public class FoodTextRandomizer : Randomizer
             string chosenCaution = cautions[UnityEngine.Random.Range(0, cautions.Count)];
             string chosenFactoryCaution = factoryCautions[UnityEngine.Random.Range(0, factoryCautions.Count)];
 
-            // 랜덤으로 20~45개 단어 선택
             var selectedWords = allWords.OrderBy(x => UnityEngine.Random.value).Take(UnityEngine.Random.Range(20, 46)).ToList();
 
-            // --------------------------------------------------------
-            // 화면 출력용(노이즈 가득) vs 답지 저장용(순정) 이중 분할 처리
-            // --------------------------------------------------------
             List<string> uiIngredientsList = new List<string>();
             List<string> logIngredientsList = new List<string>();
 
@@ -87,49 +89,24 @@ public class FoodTextRandomizer : Randomizer
                 string cleanWord = word.Trim();
                 if (string.IsNullOrEmpty(cleanWord)) continue;
 
-                // 1) 답지용 리스트에는 괄호 없이 무조건 '순정 알맹이 단어'만 저장
                 logIngredientsList.Add(cleanWord);
 
-                // 2) 화면 출력용 리스트에는 주사위를 굴려 실전형 괄호/원산지 노이즈 삽입
                 float noiseDice = UnityEngine.Random.value;
-
-                if (noiseDice < 0.35f) // 35% 확률로 (원산지) 노이즈 주입 -> 예: 대두(미국산)
-                {
-                    string country = randomCountries[UnityEngine.Random.Range(0, randomCountries.Length)];
-                    uiIngredientsList.Add($"{cleanWord}({country})");
-                }
-                else if (noiseDice < 0.50f) // 15% 확률로 (특정성분:원산지) 복합 노이즈 주입 -> 예: 조개류엑기스(굴:국산)
-                {
-                    string country = randomCountries[UnityEngine.Random.Range(0, randomCountries.Length)];
-                    uiIngredientsList.Add($"{cleanWord}(포도당:{country})");
-                }
-                else if (noiseDice < 0.60f) // 10% 확률로 (함유) 노이즈 주입 -> 예: 밀(밀함유)
-                {
-                    uiIngredientsList.Add($"{cleanWord}({cleanWord}함유)");
-                }
-                else // 나머지 40% 확률은 괄호 없이 깔끔하게 출력
-                {
-                    uiIngredientsList.Add(cleanWord);
-                }
+                if (noiseDice < 0.35f) uiIngredientsList.Add($"{cleanWord}({randomCountries[UnityEngine.Random.Range(0, randomCountries.Length)]})");
+                else if (noiseDice < 0.50f) uiIngredientsList.Add($"{cleanWord}(포도당:{randomCountries[UnityEngine.Random.Range(0, randomCountries.Length)]})");
+                else if (noiseDice < 0.60f) uiIngredientsList.Add($"{cleanWord}({cleanWord}함유)");
+                else uiIngredientsList.Add(cleanWord);
             }
 
-            // UI 텍스트에 들어갈 최종 원재료명 문자열 생성
             string uiIngredientsText = string.Join(", ", uiIngredientsList);
-            // 정답 로그 파일에 들어갈 순정 문자열 생성
             string logIngredientsText = string.Join(", ", logIngredientsList);
 
-
-            // --------------------------------------------------------
-            // [1, 2] 배경색 완전 랜덤화 및 밝기 맞춤형 글씨 색상 제어
-            // --------------------------------------------------------
+            //  배경색 및 밝기 제어
             Color randomBgColor = new Color(UnityEngine.Random.value, UnityEngine.Random.value, UnityEngine.Random.value, 1.0f);
             if (tableImage != null) tableImage.color = randomBgColor;
 
             float luminance = 0.2126f * randomBgColor.r + 0.7152f * randomBgColor.g + 0.0722f * randomBgColor.b;
-
-            Color mainTextColor;
-            Color allergyBarColor;
-            Color allergyTextColor;
+            Color mainTextColor, allergyBarColor, allergyTextColor;
 
             if (luminance > 0.5f)
             {
@@ -144,20 +121,17 @@ public class FoodTextRandomizer : Randomizer
                 allergyTextColor = Color.black;
             }
 
-            // --------------------------------------------------------
-            // [3] 폰트 랜덤화 및 자간/행간 랜덤 노이즈
-            // --------------------------------------------------------
+            //  폰트 스타일 다양화
             if (fontAssets != null && fontAssets.Length > 0)
             {
                 TMP_FontAsset targetFont = fontAssets[UnityEngine.Random.Range(0, fontAssets.Length)];
                 mainTmp.font = targetFont;
                 allergyTmp.font = targetFont;
             }
-
-            mainTmp.characterSpacing = UnityEngine.Random.Range(-5f, 3f);
+            mainTmp.characterSpacing = UnityEngine.Random.Range(-6f, 3f);
             mainTmp.lineSpacing = UnityEngine.Random.Range(-9f, 12f);
 
-            // --- UI 조립 (여기에 노이즈가 가득한 uiIngredientsText가 매핑됩니다) ---
+            // UI 조립
             List<string> UI_pieces = new List<string>
             {
                 $"<b>제품명:</b> {chosenProductName}",
@@ -167,7 +141,7 @@ public class FoodTextRandomizer : Randomizer
                 $"<b>주의사항:</b> {chosenCaution} | {chosenFactoryCaution}"
             };
 
-            mainTmp.text = string.Join("  |  ", UI_pieces);
+            mainTmp.text = string.Join("  |   ", UI_pieces);
             mainTmp.fontSize = fontSize;
             mainTmp.color = mainTextColor;
             mainTmp.alignment = TextAlignmentOptions.Left;
@@ -180,183 +154,181 @@ public class FoodTextRandomizer : Randomizer
             var allergyBarImage = barTrans.GetComponent<Image>();
             if (allergyBarImage != null) allergyBarImage.color = allergyBarColor;
 
-            // --------------------------------------------------------
-            // [4] 네모 상자 레이아웃 다양화 및 "실물 패키지 재질/주름" 랜덤화
-            // --------------------------------------------------------
+            // Cylinder 제어
             GameObject cylinder = GameObject.Find("Cylinder");
             if (cylinder != null)
             {
                 var renderer = cylinder.GetComponent<Renderer>();
-
                 if (renderer != null)
                 {
-                    float smoothness = 0.5f;
-                    float metallic = 0.0f;
-                    float bumpScale = 0.0f; 
+                    Color randomCylinderColor = new Color(UnityEngine.Random.value, UnityEngine.Random.value, UnityEngine.Random.value, 1.0f);
 
+                    if (renderer.material.HasProperty("_BaseColor"))
+                        renderer.material.SetColor("_BaseColor", randomCylinderColor);
+                    else
+                        renderer.material.SetColor("_Color", randomCylinderColor);
+
+                    float smoothness = 0.5f, metallic = 0.0f, bumpScale = 0.0f;
                     float materialDice = UnityEngine.Random.value;
 
-                    if (materialDice < 0.4f)
-                    {
-                        // 캔 스타일 (반무광 알루미늄 메탈 + 잔주름)
-                        metallic = UnityEngine.Random.Range(0.7f, 0.95f);
-                        smoothness = UnityEngine.Random.Range(0.2f, 0.4f);
-                        bumpScale = UnityEngine.Random.Range(0.2f, 0.8f); // 메탈은 주름이 잔잔하게
-                    }
-                    else if (materialDice < 0.7f)
-                    {
-                        // 과자 봉지 스타일 (쨍한 유광 비닐 + 구김)
-                        metallic = UnityEngine.Random.Range(0.0f, 0.1f);
-                        smoothness = UnityEngine.Random.Range(0.75f, 0.95f);
+                    if (materialDice < 0.4f) { metallic = UnityEngine.Random.Range(0.7f, 0.95f); smoothness = UnityEngine.Random.Range(0.2f, 0.4f); bumpScale = UnityEngine.Random.Range(0.2f, 0.8f); }
+                    else if (materialDice < 0.7f) { metallic = UnityEngine.Random.Range(0.0f, 0.1f); smoothness = UnityEngine.Random.Range(0.75f, 0.95f); bumpScale = (UnityEngine.Random.value > 0.4f) ? UnityEngine.Random.Range(0.2f, 1.0f) : 0f; }
+                    else { smoothness = UnityEngine.Random.Range(0.05f, 0.15f); }
 
-                        // 60% 확률로 비닐을 사정없이 쭈글쭈글하게 구겨버림
-                        bumpScale = (UnityEngine.Random.value > 0.4f) ? UnityEngine.Random.Range(0.2f, 1.0f) : 0f;
-                    }
-                    else
-                    {
-                        // 우유팩/상자 스타일 (매트한 무광 종이 + 주름 없음)
-                        metallic = 0.0f;
-                        smoothness = UnityEngine.Random.Range(0.05f, 0.15f);
-                        bumpScale = 0.0f; // 종이 상자는 주름이 없습니다.
-                    }
-
-                    // 유니티 표준 셰이더(Standard Shader) 속성에 최종 값 주입
                     renderer.material.SetFloat("_Glossiness", smoothness);
                     renderer.material.SetFloat("_Smoothness", smoothness);
                     renderer.material.SetFloat("_Metallic", metallic);
-
-                    if (renderer.material.HasProperty("_BumpScale"))
-                    {
-                        renderer.material.SetFloat("_BumpScale", bumpScale);
-                    }
+                    if (renderer.material.HasProperty("_BumpScale")) renderer.material.SetFloat("_BumpScale", bumpScale);
                 }
-
-                // --- 여기서부터 레이아웃 크기 연산 (기존 형님 코드 스코프 안전지대) ---
-                float chosenTableWidth;
-
-                // 50% 확률로 가로가 길쭉한 상자 또는 세로가 홀쭉한 상자 타깃팅
-                if (UnityEngine.Random.value > 0.5f)
-                {
-                    // 가로 넙데데 스타일 (뚱뚱한 패키지)
-                    chosenTableWidth = UnityEngine.Random.Range(600f, maxWidth);
-                }
-                else
-                {
-                    // 세로 슬림 스타일 (몬스터 캔, 길쭉한 음료팩)
-                    chosenTableWidth = UnityEngine.Random.Range(minWidth, 500f);
-                }
-
-                float textWidth = chosenTableWidth - 40f;
-
-                // 세로 높이 유동적 래핑 연산
-                mainTmp.rectTransform.sizeDelta = new Vector2(textWidth, 5000f);
-                mainTmp.ForceMeshUpdate();
-
-                float mainH = mainTmp.preferredHeight;
-                mainTmp.rectTransform.sizeDelta = new Vector2(textWidth, mainH);
-
-                Canvas.ForceUpdateCanvases();
-                float barW = Mathf.Min(allergyBarRect.rect.width, textWidth);
-                allergyBarRect.sizeDelta = new Vector2(barW, allergyBarRect.rect.height);
-
-                float barH = allergyBarRect.rect.height;
-                float totalHeight = mainH + barH + 80f;
-
-                // 최종 결정된 네모(FoodTable) 크기 할당
-                tableRect.sizeDelta = new Vector2(chosenTableWidth, totalHeight);
-
-                // 실린더 랜덤 회전
                 cylinder.transform.rotation = Quaternion.Euler(0, UnityEngine.Random.Range(0f, 360f), 0);
             }
 
+            float chosenTableWidth = (UnityEngine.Random.value > 0.5f) ? UnityEngine.Random.Range(700f, maxWidth) : UnityEngine.Random.Range(550f, 700f);
+            float textWidth = chosenTableWidth - 80f;
+
+            mainTmp.rectTransform.sizeDelta = new Vector2(textWidth, 5000f);
+            mainTmp.ForceMeshUpdate();
+            float mainH = mainTmp.preferredHeight;
+            mainTmp.rectTransform.sizeDelta = new Vector2(textWidth, mainH);
+
+            Canvas.ForceUpdateCanvases();
+            float barW = Mathf.Min(allergyBarRect.rect.width, textWidth);
+            allergyBarRect.sizeDelta = new Vector2(barW, allergyBarRect.rect.height);
+
+            float totalHeight = mainH + allergyBarRect.rect.height + UnityEngine.Random.Range(200f, 350f);
+            tableRect.sizeDelta = new Vector2(chosenTableWidth, totalHeight);
+
             // --------------------------------------------------------
-            // 테두리 선(Outline) 유무 및 두께 확률 랜덤 노이즈
+            // 빈 공간에 큼직하게 떼거지 스폰
             // --------------------------------------------------------
-            var tableOutline = tag.GetComponent<Outline>();
-
-            if (tableOutline != null)
+            Transform oldNoise = tag.transform.Find("Generated_Noise_Objects");
+            if (oldNoise != null)
             {
-                float borderDice = UnityEngine.Random.value;
+                oldNoise.name = "Obsolete_Noise"; // 이름 바꿔서 중복 추적 방지
+                GameObject.Destroy(oldNoise.gameObject);
+            }
+            GameObject noiseContainer = new GameObject("Generated_Noise_Objects");
+            noiseContainer.transform.SetParent(tag.transform, false);
 
-                if (borderDice < 0.35f)
-                {
-                    // 1) 35% 확률로 테두리 아예 끄기 (선 없는 비닐 성분표 대비)
-                    tableOutline.enabled = false;
-                }
-                else if (borderDice < 0.70f)
-                {
-                    // 2) 35% 확률로 일반적인 얇은 테두리 선 유지
-                    tableOutline.enabled = true;
-                    tableOutline.effectDistance = new Vector2(1f, -1f);
+            float tableHalfW = chosenTableWidth * 0.5f;
+            float tableHalfH = totalHeight * 0.5f;
 
-                    // 글자색 반전 로직에서 계산된 luminance 활용하여 센스있게 선 색상 매칭
-                    tableOutline.effectColor = (luminance > 0.5f) ?
-                        new Color(0f, 0f, 0f, 0.4f) : new Color(1f, 1f, 1f, 0.4f);
-                }
-                else
-                {
-                    // 3) 30% 확률로 완전 굵고 진한 테두리 선 강제 부여 (눈뽕/백화 현상 방패용)
-                    tableOutline.enabled = true;
+            for (int zone = 0; zone < 4; zone++)
+            {
+                
+                    Vector3 targetSpawnPos = Vector3.zero;
+                    switch (zone)
+                    {
+                        case 0: targetSpawnPos.x = UnityEngine.Random.Range(-tableHalfW * 0.7f, tableHalfW * 0.7f); targetSpawnPos.y = tableHalfH + UnityEngine.Random.Range(10f, 40f); break;
+                        case 1: targetSpawnPos.x = UnityEngine.Random.Range(-tableHalfW * 0.7f, tableHalfW * 0.7f); targetSpawnPos.y = -tableHalfH - UnityEngine.Random.Range(10f, 40f); break;
+                        case 2: targetSpawnPos.x = -tableHalfW - UnityEngine.Random.Range(20f, 50f); targetSpawnPos.y = UnityEngine.Random.Range(-tableHalfH * 0.6f, tableHalfH * 0.6f); break;
+                        case 3: targetSpawnPos.x = tableHalfW + UnityEngine.Random.Range(20f, 50f); targetSpawnPos.y = UnityEngine.Random.Range(-tableHalfH * 0.6f, tableHalfH * 0.6f); break;
+                    }
+                    targetSpawnPos.z = -1f;
 
-                    // 대각선으로 두껍게 빡! (인스펙터의 수치를 스크립트로 조절)
-                    float thick = UnityEngine.Random.Range(4f, 7f);
-                    tableOutline.effectDistance = new Vector2(thick, -thick);
+                    GameObject selectedPrefab = (UnityEngine.Random.value > 0.4f) ? barcodePrefab : noiseTitlePrefab;
+                    if (selectedPrefab != null)
+                    {
+                        GameObject spawnedNoise = GameObject.Instantiate(selectedPrefab, noiseContainer.transform);
+                        RectTransform noiseRT = spawnedNoise.GetComponent<RectTransform>();
+                        if (noiseRT != null) noiseRT.anchoredPosition = new Vector2(targetSpawnPos.x, targetSpawnPos.y);
+                        else spawnedNoise.transform.localPosition = targetSpawnPos;
 
-                    // 확실하게 컷팅되도록 투명도 없는 100% 불투명 검은색 또는 흰색 부여
-                    tableOutline.effectColor = (luminance > 0.5f) ? Color.black : Color.white;
-                }
+                        spawnedNoise.transform.localRotation = Quaternion.Euler(0, 0, UnityEngine.Random.Range(-20f, 20f));
+                        spawnedNoise.transform.localScale = new Vector3(UnityEngine.Random.Range(1.5f, 3.0f), UnityEngine.Random.Range(1.2f, 2.0f), 1f);
+
+                        var spawnedTmp = spawnedNoise.GetComponentInChildren<TextMeshProUGUI>();
+                        if (spawnedTmp != null)
+                        {
+                            Color c = mainTextColor; 
+                            c.a = UnityEngine.Random.Range(0.15f, 0.3f);
+                            spawnedTmp.color = c;
+                        }
+
+                    }
+                
             }
 
+            GenerateBackgroundShapes();
 
-
-            // --- [정답 로그 기록 - 순정 단어만 깔끔하게 저장] ---
-            string logPath = Path.Combine(Application.persistentDataPath, "label_log.txt");
-            string logEntry = $"Ingredients: {logIngredientsText}";
-
-            try
-            {
-                File.AppendAllText(logPath, logEntry + Environment.NewLine);
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning("로그 기록 실패: " + e.Message);
-            }
+            FoodDataLogger.SaveIngredientsLog(logIngredientsText);
         }
     }
 
-    protected override void OnScenarioComplete()
+    private void GenerateBackgroundShapes()
     {
-        try
+        GameObject oldShapes = GameObject.Find("Background_Geometry_Noise");
+        if (oldShapes != null)
         {
-            string soloPath = Path.Combine(Application.dataPath, "../LocalProjectWorkspace/outputs/solo");
-            string targetImgFolder = Path.Combine(soloPath, "AllImages"); // 💡 한 곳으로 모을 종착지 폴더
+            oldShapes.name = "Obsolete_Geometry";
+            GameObject.Destroy(oldShapes);
+        }
 
-            if (!Directory.Exists(soloPath)) return;
-            if (!Directory.Exists(targetImgFolder)) Directory.CreateDirectory(targetImgFolder);
+        GameObject shapeHolder = new GameObject("Background_Geometry_Noise");
 
-            // 1. SOLO 하위의 모든 sequence 폴더를 탐색합니다.
-            string[] subDirs = Directory.GetDirectories(soloPath);
-            int fileCounter = 0;
+  
+        GameObject cylinder = GameObject.Find("Cylinder");
+        Vector3 cylinderPos = (cylinder != null) ? cylinder.transform.position : new Vector3(0, 0, -5.9f);
 
-            foreach (string dir in subDirs)
+        shapeHolder.transform.position = cylinderPos;
+
+        for (int i = 0; i < shapeCount; i++)
+        {
+            int shapeDice = UnityEngine.Random.Range(0, 3);
+            PrimitiveType selectedType = PrimitiveType.Cube;
+            if (shapeDice == 1) selectedType = PrimitiveType.Sphere;
+            if (shapeDice == 2) selectedType = PrimitiveType.Cylinder;
+
+            GameObject shape = GameObject.CreatePrimitive(selectedType);
+
+            shape.transform.SetParent(shapeHolder.transform, false);
+
+         
+            float posX = UnityEngine.Random.Range(-10.0f,10.0f);
+            float posY = UnityEngine.Random.Range(-10.0f,10.0f);
+
+            float posZ = UnityEngine.Random.Range(8.0f, 12.5f);
+            shape.transform.localPosition = new Vector3(posX, posY, posZ);
+
+  
+            float scaleX = UnityEngine.Random.Range(4.0f, 8.0f);
+            float scaleY = UnityEngine.Random.Range(4.0f, 8.0f);
+            float scaleZ = UnityEngine.Random.Range(5.0f, 8.0f);
+            shape.transform.localScale = new Vector3(scaleX, scaleY, scaleZ);
+
+ 
+            shape.transform.localRotation = Quaternion.Euler(
+                UnityEngine.Random.Range(0f, 360f),
+                UnityEngine.Random.Range(0f, 360f),
+                UnityEngine.Random.Range(0f, 360f)
+            );
+
+            Renderer shapeRenderer = shape.GetComponent<Renderer>();
+            if (shapeRenderer != null)
             {
-                if (dir.Contains("AllImages")) continue; 
+                Color randomColor = Color.HSVToRGB(
+                    UnityEngine.Random.Range(0f, 1f),
+                    UnityEngine.Random.Range(0.6f, 1.0f),
+                    UnityEngine.Random.Range(0.5f, 1.0f)
+                );
 
-                string[] images = Directory.GetFiles(dir, "*.jpg");
-                foreach (string imgPath in images)
+                Material tempMat = null;
+                Shader urpUnlit = Shader.Find("Universal Render Pipeline/Unlit");
+                if (urpUnlit != null) tempMat = new Material(urpUnlit);
+                if (tempMat == null) tempMat = shapeRenderer.material;
+
+                if (tempMat != null)
                 {
-                    string newFileName = $"img_{fileCounter}.jpg"; // 겹치지 않게 순번 정렬
-                    string destPath = Path.Combine(targetImgFolder, newFileName);
-
-                    File.Copy(imgPath, destPath, true);
-                    fileCounter++;
+                    if (tempMat.HasProperty("_BaseColor")) tempMat.SetColor("_BaseColor", randomColor);
+                    if (tempMat.HasProperty("_Color")) tempMat.SetColor("_Color", randomColor);
+                    shapeRenderer.material = tempMat;
                 }
             }
-            Debug.Log($"자동 정리 완수: 총 {fileCounter}장의 이미지를 AllImages 폴더 하나로 이쁘게 몰아놨습니다!");
-        }
-        catch (Exception e)
-        {
-            Debug.LogWarning("SOLO 폴더 자동 통합 중 오류 발생 (경로를 확인해 주세요): " + e.Message);
+
+            shape.layer = 4;
+
+            Collider c = shape.GetComponent<Collider>();
+            if (c != null) GameObject.Destroy(c);
         }
     }
 }
