@@ -145,7 +145,7 @@
             margin-bottom: 0;
         }
         .collapse-panel.open {
-            max-height: 600px;
+            max-height: 1200px; /* 🚨 많은 태그 수용을 위해 높이 확보 */
             opacity: 1;
             margin-bottom: 10px;
         }
@@ -196,7 +196,6 @@
         </div>
         {% endif %}
 
-        <!-- ▼ 원재료명 토글 -->
         <div class="toggle-wrap">
             <button class="btn-toggle" onclick="togglePanel('ingredientPanel', this)">
                 <div class="toggle-track">
@@ -214,13 +213,17 @@
             <div class="collapse-panel" id="ingredientPanel">
                 <div class="panel-inner">
                     <div class="ingredient-panel-body">
-                        <div class="card-label" style="margin-bottom:10px;">알레르기 유발 성분</div>
+                        <div class="card-label" style="margin-bottom:10px;">스캔된 성분 전체</div>
                         <div class="tags">
-                            {% for ingredient in detected_text_korean.split(', ') %}
-                                {% if "생감자" in ingredient or "대두" in ingredient or "소맥" in ingredient or "우유" in ingredient or "쇠고기" in ingredient or "함유" in ingredient or "분말" in ingredient or "초콜" in ingredient or "시즈닝" in ingredient or "토마토" in ingredient or "복숭아" in ingredient or "아황산" in ingredient or "난백" in ingredient or "홍합" in ingredient or "새우" in ingredient or "밀" in ingredient %}
-                                    <span class="tag korean">{{ ingredient }}</span>
-                                {% endif %}
-                            {% endfor %}
+                            {% if detected_text_korean %}
+                                {% for ingredient in detected_text_korean.split(', ') %}
+                                    {% if ingredient.strip() %}
+                                        <span class="tag korean">{{ ingredient.strip() }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            {% else %}
+                                <span style="font-size: 0.85rem; color: var(--muted);">스캔된 성분이 없습니다.</span>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -228,7 +231,6 @@
         </div>
 
 
-        <!-- ▼ 글로벌 / Donut VLM 토글 -->
         <div class="toggle-wrap">
             <button class="btn-toggle" onclick="togglePanel('globalPanel', this)">
                 <div class="toggle-track">
@@ -248,9 +250,15 @@
                     <div class="global-panel-body">
                         <div class="card-label" style="margin-bottom:10px;">Detected Ingredients — English</div>
                         <div class="tags">
-                            {% for ingredient in detected_text.split(', ') %}
-                                <span class="tag">{{ ingredient }}</span>
-                            {% endfor %}
+                            {% if detected_text %}
+                                {% for ingredient in detected_text.split(', ') %}
+                                    {% if ingredient.strip() %}
+                                        <span class="tag">{{ ingredient.strip() }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            {% else %}
+                                <span style="font-size: 0.85rem; color: var(--muted);">No ingredients detected.</span>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
