@@ -1,11 +1,12 @@
-easyocr
 fastapi
 uvicorn
 jinja2
 deep-translator
 python-multipart
+pillow
 pillow-heif
-peft
 opencv-python-headless
-pillow-heif
-
+torch
+torchvision
+transformers
+peft
