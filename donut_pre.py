@@ -1,307 +1,259 @@
 # -*- coding: utf-8 -*-
-"""Donut 실험용 정리본.
+"""Donut_train_리팩터링_최종.ipynb"""
 
-Colab에서 실행한 실험 코드를 깔끔한 단일 Python 파일 형태로 정리한 버전입니다.
-실험 중 확인한 학습/평가/추론 흐름은 유지하고, 중복된 디버그 블록과 셀 전용 구문은 제거했습니다.
-"""
+# ==========================================
+# 1. 라이브러리 설치 및 구글 드라이브 마운트
+# ==========================================
+!pip install -q transformers datasets sentencepiece timm bitsandbytes accelerate peft evaluate
 
+from google.colab import drive
+drive.mount('/content/drive')
+
+# ==========================================
+# 2. 전역 경로 설정 및 전처리 (통일 가이드)
+# ==========================================
 import os
+import zipfile
+import json
+import gc
 import re
-from pathlib import Path
-
-import pandas as pd
 import torch
-from PIL import Image, ImageEnhance
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+from transformers import DonutProcessor, VisionEncoderDecoderModel, BitsAndBytesConfig
+from peft import get_peft_model, LoraConfig, TaskType, PeftModel
+import evaluate
 from tqdm import tqdm
-from torchvision import transforms
-from transformers import DonutProcessor, VisionEncoderDecoderModel
 
-try:
-    import pillow_heif
-    pillow_heif.register_heif_opener()
-except Exception:
-    pillow_heif = None
+# 구글 드라이브 기본 경로
+BASE_PATH = "/content/drive/MyDrive/인지응 3팀 공유폴더"
+ZIP_PATH = f"{BASE_PATH}/GeneratedData.zip"
+LABEL_TXT_PATH = f"{BASE_PATH}/labels.txt"
 
-try:
-    from peft import PeftModel
-except Exception as exc:
-    raise ImportError("peft가 필요합니다. pip install peft 를 먼저 실행하세요.") from exc
+# 코랩 로컬 임시 작업 공간
+IMAGE_DIR = "/content/dataset_images"
+OUTPUT_LABEL_DIR = "/content/labels"
+MODEL_SAVE_PATH = "/content/donut_model_temp"  # <--- 모든 가중치 경로를 이 주소 하나로 통일합니다!
 
-# ------------------------------------------------------------
-# 공통 경로
-# ------------------------------------------------------------
-BASE_DIR = Path("/content/drive/MyDrive/인지응 3팀 공유폴더/3000장")
-LABEL_FILE = BASE_DIR / "label_log.txt"
-TAR_PATH = BASE_DIR / "solo.tar"
-SAVE_PATH = BASE_DIR / "donut_snack_v3_final"
-IMAGE_FINAL_DIR = Path("/content/dataset/images")
-FINAL_MODEL_PATH = SAVE_PATH / "final_v3_complete"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+os.makedirs(IMAGE_DIR, exist_ok=True)
+os.makedirs(OUTPUT_LABEL_DIR, exist_ok=True)
 
-# ------------------------------------------------------------
-# 데이터셋
-# ------------------------------------------------------------
+# 압축 해제
+if os.path.exists(ZIP_PATH):
+    with zipfile.ZipFile(ZIP_PATH, 'r') as zip_ref:
+        zip_ref.extractall(IMAGE_DIR)
+    print("압축 해제 완료!")
+
+# 라벨 변환 (TXT -> JSON)
+if os.path.exists(LABEL_TXT_PATH):
+    with open(LABEL_TXT_PATH, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    for line in lines:
+        parts = line.strip().split(".png")
+        if len(parts) < 2: continue
+
+        img_name = parts[0].strip() + ".png"
+        content = parts[1].strip()
+        label_dict = {"gt_parse": {"원재료명": content}}
+
+        json_path = os.path.join(OUTPUT_LABEL_DIR, img_name.replace(".png", ".json"))
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(label_dict, f, ensure_ascii=False, indent=4)
+    print("라벨 변환 완료!")
+
+# ==========================================
+# 3. 환경 최적화 및 모델/LoRA 로드
+# ==========================================
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+gc.collect()
+torch.cuda.empty_cache()
+
+MODEL_NAME = "naver-clova-ix/donut-base"
+processor = DonutProcessor.from_pretrained(MODEL_NAME)
+model = VisionEncoderDecoderModel.from_pretrained(
+    MODEL_NAME,
+    quantization_config=BitsAndBytesConfig(load_in_8bit=True),
+    device_map="auto"
+)
+
+model.config.pad_token_id = processor.tokenizer.pad_token_id
+model.config.decoder_start_token_id = processor.tokenizer.eos_token_id
+
+peft_config = LoraConfig(
+    task_type=TaskType.SEQ_2_SEQ_LM,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"]
+)
+model = get_peft_model(model, peft_config)
+model.gradient_checkpointing_enable()
+
+# ==========================================
+# 4. 방어적 데이터셋 클래스 정의
+# ==========================================
 class SnackDataset(Dataset):
-    def __init__(self, img_dir, label_file, processor, train=True):
+    def __init__(self, image_dir, label_dir, processor):
+        self.image_dir = image_dir
+        self.label_dir = label_dir
         self.processor = processor
-        self.train = train
-        self.img_dir = Path(img_dir)
+        
+        all_images = [f for f in os.listdir(image_dir) if f.endswith(".png")]
+        self.image_files = []
+        for f in all_images:
+            label_name = f.replace(".png", ".json")
+            if os.path.exists(os.path.join(label_dir, label_name)):
+                self.image_files.append(f)
 
-        with open(label_file, "r", encoding="utf-8") as f:
-            self.lines = [line.strip().replace("Ingredients:", "").strip() for line in f if line.strip()]
-
-        existing_imgs = set(self.img_dir.iterdir())
-        self.img_files = [f"sequence.{i + 1}.png" for i in range(len(self.lines)) if (self.img_dir / f"sequence.{i + 1}.png") in existing_imgs]
-
-        self.transform = transforms.Compose([
-            transforms.ColorJitter(brightness=0.2, contrast=0.2),
-            transforms.RandomAffine(degrees=3, translate=(0.02, 0.02), scale=(0.98, 1.02)),
-        ]) if train else None
-
-    def __len__(self):
-        return len(self.img_files)
+    def __len__(self): return len(self.image_files)
 
     def __getitem__(self, idx):
-        img_name = self.img_files[idx]
-        image = Image.open(self.img_dir / img_name).convert("RGB")
-        if self.transform is not None:
-            image = self.transform(image)
+        image_name = self.image_files[idx]
+        image = Image.open(os.path.join(self.image_dir, image_name)).convert("RGB")
 
-        line_idx = int(re.findall(r"\d+", img_name)[0]) - 1
-        target = f"<s><s_food><s_원재료>{self.lines[line_idx]}</s_원재료></s_food></s>"
+        label_path = os.path.join(self.label_dir, image_name.replace(".png", ".json"))
+        with open(label_path, "r", encoding="utf-8") as f:
+            label_data = json.load(f)
 
+        target_sequence = json.dumps(label_data.get("gt_parse", label_data), ensure_ascii=False)
         pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze()
-        labels = self.processor.tokenizer(
-            target,
-            add_special_tokens=False,
-            max_length=512,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids.squeeze()
+        labels = self.processor.tokenizer(target_sequence, add_special_tokens=True, max_length=512, padding="max_length", truncation=True, return_tensors="pt").input_ids.squeeze()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
         return {"pixel_values": pixel_values, "labels": labels}
 
+# ==========================================
+# 5. 모델 학습 (Training)
+# ==========================================
+dataset = SnackDataset(IMAGE_DIR, OUTPUT_LABEL_DIR, processor)
+dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5)
 
-# ------------------------------------------------------------
-# 실험용 유틸
-# ------------------------------------------------------------
-def clean_text(text):
-    text = re.sub(r"<.*?>", "", text)
-    text = text.replace("s_food>", "").replace("s_원재료>", "")
-    text = text.strip()
-    return re.sub(r"[。、\.]", ",", text)
+model.train()
+print("학습 시작!")
 
+for epoch in range(5):
+    for batch_idx, batch in enumerate(dataloader):
+        pixel_values = batch["pixel_values"].to("cuda")
+        labels = batch["labels"].to("cuda")
 
-def calculate_cer(pred, target):
-    if not target:
-        return 1.0
-    import Levenshtein
+        loss = model(pixel_values=pixel_values, labels=labels).loss
 
-    return Levenshtein.distance(pred, target) / len(target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
+        if batch_idx % 10 == 0:
+            print(f"Epoch {epoch+1}, Batch {batch_idx}, Loss: {loss.item():.4f}")
 
-def build_master_dict(label_file=LABEL_FILE):
-    with open(label_file, "r", encoding="utf-8") as f:
-        lines = [line.strip().replace("Ingredients:", "").strip() for line in f if line.strip()]
+# 학습 완료 후 지정된 단일 로컬 경로에 깔끔하게 저장
+model.save_pretrained(MODEL_SAVE_PATH)
+processor.save_pretrained(MODEL_SAVE_PATH)
+print(f"학습 완료 및 모델 저장 완료: {MODEL_SAVE_PATH}")
 
-    master_dict = set()
-    for line in lines:
-        for word in line.split(","):
-            w = word.strip()
-            if w and len(w) > 1:
-                master_dict.add(w)
-    return master_dict
+# 백업용 zip 생성 및 다운로드
+!zip -r /content/donut_model_backup.zip {MODEL_SAVE_PATH}
+print("백업용 zip 파일이 /content/donut_model_backup.zip 에 생성되었습니다.")
 
+# ==========================================
+# 6. 스모크 테스트 (반복 방지 파라미터 적용)
+# ==========================================
+model.eval()
+test_dataset = SnackDataset(IMAGE_DIR, OUTPUT_LABEL_DIR, processor)
+subset_indices = range(min(5, len(test_dataset)))
 
-def advanced_clean_and_correct(text, master_dict):
-    text = clean_text(text)
-    raw_words = [w.strip() for w in text.split(",") if w.strip()]
-    corrected = []
+print("\n--- 모델 작동 여부 확인 (스모크 테스트) ---")
+with torch.no_grad():
+    for i in subset_indices:
+        batch = test_dataset[i]
+        pixel_values = batch["pixel_values"].unsqueeze(0).to("cuda")
 
-    for word in raw_words:
-        if word in master_dict:
-            corrected.append(word)
-            continue
-
-        prefix_matches = [v for v in master_dict if v.startswith(word) and len(word) >= 2]
-        if prefix_matches:
-            corrected.append(min(prefix_matches, key=len))
-            continue
-
-        close_matches = __import__("difflib").get_close_matches(word, master_dict, n=1, cutoff=0.5)
-        corrected.append(close_matches[0] if close_matches else word)
-
-    unique_words = []
-    for item in corrected:
-        if item not in unique_words:
-            unique_words.append(item)
-    return ", ".join(unique_words)
-
-
-# ------------------------------------------------------------
-# 1) 학습 (실험 기록 유지)
-# ------------------------------------------------------------
-def train_model():
-    IMAGE_FINAL_DIR.mkdir(parents=True, exist_ok=True)
-
-    START_EPOCH = 20
-    TOTAL_EPOCHS = 30
-    BATCH_SIZE = 2
-    ACCUMULATION_STEPS = 4
-    LEARNING_RATE = 3e-5
-
-    processor = DonutProcessor.from_pretrained(FINAL_MODEL_PATH)
-    base_model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base", device_map="auto", torch_dtype=torch.float16)
-    base_model.decoder.resize_token_embeddings(len(processor.tokenizer))
-    model = PeftModel.from_pretrained(base_model, FINAL_MODEL_PATH, is_trainable=True)
-
-    model.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids("<s_food>")
-
-    dataset = SnackDataset(IMAGE_FINAL_DIR, LABEL_FILE, processor, train=True)
-    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
-
-    model.train()
-    for epoch in range(START_EPOCH, TOTAL_EPOCHS):
-        progress = tqdm(loader, desc=f"Epoch {epoch + 1}/{TOTAL_EPOCHS}")
-        optimizer.zero_grad(set_to_none=True)
-
-        for step, batch in enumerate(progress):
-            pixel_values = batch["pixel_values"].to(DEVICE, dtype=torch.float16)
-            labels = batch["labels"].to(DEVICE)
-
-            outputs = model(pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss / ACCUMULATION_STEPS
-            loss.backward()
-
-            if (step + 1) % ACCUMULATION_STEPS == 0:
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-
-            progress.set_postfix(loss=loss.item() * ACCUMULATION_STEPS)
-
-        if (epoch + 1) % 5 == 0:
-            save_path = SAVE_PATH / f"epoch_{epoch + 1}"
-            save_path.mkdir(parents=True, exist_ok=True)
-            model.save_pretrained(save_path)
-            processor.save_pretrained(save_path)
-            print(f"중간 저장: {save_path}")
-
-    final_path = SAVE_PATH / "final_v3_complete"
-    model.save_pretrained(final_path)
-    processor.save_pretrained(final_path)
-    print(f"최종 저장: {final_path}")
-
-
-# ------------------------------------------------------------
-# 2) 평가 (실험 결과 확인용)
-# ------------------------------------------------------------
-def evaluate_model(model_path=FINAL_MODEL_PATH, sample_limit=None):
-    processor = DonutProcessor.from_pretrained(model_path)
-    base_model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base")
-    base_model.decoder.resize_token_embeddings(len(processor.tokenizer))
-    model = PeftModel.from_pretrained(base_model, model_path).to(DEVICE)
-    model.eval()
-
-    with open(LABEL_FILE, "r", encoding="utf-8") as f:
-        lines = [line.strip().replace("Ingredients:", "").strip() for line in f if line.strip()]
-
-    dataset = SnackDataset(IMAGE_FINAL_DIR, LABEL_FILE, processor, train=False)
-    if sample_limit is not None:
-        dataset.img_files = dataset.img_files[:sample_limit]
-
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
-    results = []
-    total_cer = 0.0
-
-    with torch.no_grad():
-        for batch in tqdm(loader, desc="Evaluating"):
-            pixel_values = batch["pixel_values"].to(DEVICE, dtype=torch.float16)
-            labels = batch["labels"]
-            _ = labels
-
-            outputs = model.generate(
-                pixel_values=pixel_values,
-                max_length=80,
-                num_beams=3,
-                repetition_penalty=3.5,
-                no_repeat_ngram_size=2,
-                early_stopping=True,
-                decoder_start_token_id=processor.tokenizer.convert_tokens_to_ids("<s_food>"),
-                pad_token_id=processor.tokenizer.pad_token_id,
-                eos_token_id=processor.tokenizer.eos_token_id,
-            )
-
-            pred = processor.batch_decode(outputs, skip_special_tokens=True)[0]
-            pred_clean = clean_text(pred)
-            target_clean = lines[int(re.findall(r"\d+", dataset.img_files[len(results)])[0]) - 1]
-            cer = calculate_cer(pred_clean, target_clean)
-            total_cer += cer
-
-            results.append({"file_name": dataset.img_files[len(results)], "target": target_clean, "prediction": pred_clean, "cer": cer})
-
-    avg_cer = total_cer / max(len(results), 1)
-    accuracy = (1 - avg_cer) * 100 if avg_cer <= 1 else 0
-
-    print(f"평균 CER: {avg_cer:.4f}")
-    print(f"정확도: {accuracy:.2f}%")
-
-    return pd.DataFrame(results), avg_cer
-
-
-# ------------------------------------------------------------
-# 3) 단일 이미지 추론
-# ------------------------------------------------------------
-def predict_ingredients(image_path, model_path=FINAL_MODEL_PATH, master_dict=None):
-    if master_dict is None:
-        master_dict = build_master_dict()
-
-    processor = DonutProcessor.from_pretrained(model_path)
-    base_model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base", torch_dtype=torch.float16)
-    base_model.decoder.resize_token_embeddings(len(processor.tokenizer))
-    model = PeftModel.from_pretrained(base_model, model_path).to(DEVICE)
-    model.eval()
-
-    image = Image.open(image_path).convert("RGB")
-    image = ImageEnhance.Contrast(image).enhance(1.6)
-    image = image.resize((800, 800), Image.LANCZOS)
-
-    pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE, dtype=torch.float16)
-    decoder_start_id = processor.tokenizer.convert_tokens_to_ids("<s_food>")
-
-    with torch.no_grad():
-        outputs = model.generate(
+        generated_ids = model.generate(
             pixel_values=pixel_values,
-            max_length=180,
-            num_beams=3,
-            repetition_penalty=2.0,
-            no_repeat_ngram_size=3,
-            early_stopping=True,
-            decoder_start_token_id=decoder_start_id,
-            pad_token_id=processor.tokenizer.pad_token_id,
+            max_length=512,
+            decoder_start_token_id=processor.tokenizer.eos_token_id,
             eos_token_id=processor.tokenizer.eos_token_id,
+            early_stopping=True,
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.5,
+            num_beams=3
         )
 
-    raw_pred = processor.batch_decode(outputs, skip_special_tokens=True)[0]
-    corrected = advanced_clean_and_correct(raw_pred, master_dict)
-    return corrected
+        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)
+        labels = batch["labels"].clone()
+        labels[labels == -100] = processor.tokenizer.pad_token_id
+        reference_text = processor.batch_decode(labels, skip_special_tokens=True)
 
+        print(f"\n[데이터 {i+1}]")
+        print(f"정답: {reference_text}")
+        print(f"예측: {generated_text}")
 
-# ------------------------------------------------------------
-# 실험 실행 예시
-# ------------------------------------------------------------
-if __name__ == "__main__":
-    # 1. 학습을 이어서 돌리고 싶다면 주석을 풀어서 사용하세요.
-    # train_model()
+# ==========================================
+# 7. 본 평가 및 전수 검증 (이어가기 모드 내장)
+# ==========================================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(device)
+model.eval()
 
-    # 2. 평가만 빠르게 확인하고 싶다면 아래를 실행하세요.
-    # df, avg_cer = evaluate_model(sample_limit=50)
-    # print(df.head())
+RESULT_FILE = "/content/evaluation_results.json"
+processed_files = set()
 
-    # 3. 단일 이미지 추론 예시
-    # example_path = "/content/test_inputs/1003_망고향분말_2.jpg"
-    # print(predict_ingredients(example_path))
-    pass
+if os.path.exists(RESULT_FILE):
+    with open(RESULT_FILE, "r", encoding="utf-8") as f:
+        results = json.load(f)
+        processed_files = {item['id'] for item in results}
+else:
+    results = []
+
+test_dataloader = DataLoader(test_dataset, batch_size=1)
+cer_metric = evaluate.load("cer")
+
+predictions = []
+references = []
+
+print("\n전수 성능 평가 시작 (이어가기 모드)...")
+
+with torch.no_grad():
+    for batch_idx, batch in enumerate(tqdm(test_dataloader)):
+        image_name = test_dataset.image_files[batch_idx]
+        if image_name in processed_files: continue
+
+        pixel_values = batch["pixel_values"].to(device)
+        if pixel_values.dim() == 3: pixel_values = pixel_values.unsqueeze(0)
+
+        generated_ids = model.generate(
+            pixel_values=pixel_values,
+            max_length=512,
+            decoder_start_token_id=processor.tokenizer.eos_token_id,
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.5,
+            num_beams=3
+        )
+
+        raw_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        json_match = re.search(r'\{.*\}', raw_text)
+        final_result = json_match.group() if json_match else raw_text
+
+        labels = batch["labels"].clone()
+        labels[labels == -100] = processor.tokenizer.pad_token_id
+        reference_text = processor.batch_decode(labels, skip_special_tokens=True)[0]
+
+        results.append({
+            "id": image_name,
+            "prediction": final_result,
+            "ground_truth": reference_text
+        })
+
+        # 실시간 저장 안정화
+        with open(RESULT_FILE, "w", encoding="utf-8") as f:
+            json.dump(results, f, ensure_ascii=False, indent=4)
+
+# 최종 CER 스코어 컴파일 출력
+for item in results:
+    predictions.append(item["prediction"])
+    references.append(item["ground_truth"])
+
+if predictions and references:
+    cer_score = cer_metric.compute(predictions=predictions, references=references)
+    print(f"\n[평가 완료] 최종 글로벌 CER 점수: {cer_score:.4f}")
+    print(f"상세 결과 장부 저장 완료: {RESULT_FILE}")
