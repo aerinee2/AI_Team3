@@ -1,0 +1,11 @@
+easyocr
+fastapi
+uvicorn
+jinja2
+deep-translator
+python-multipart
+pillow-heif
+peft
+opencv-python-headless
+pillow-heif
+
