@@ -8,6 +8,15 @@
 
 이 스크립트는 가공식품 라벨 데이터셋 8,000장(1차 3K + 2차 5K) 기반의 
 연장학습(Incremental Learning) 및 실물 이미지 추론 검증을 재현하기 위해 작성되었습니다.
+다음과 같은 구조가 필요합니다.
+/content/drive/MyDrive/인지응 3팀 공유폴더/
+├── 3000장/
+│   ├── solo.tar                 # 1차 가공식품 이미지 압축 파일
+│   ├── label_log.txt            # 1차 정답 장부
+│   └── donut_snack_v3_final/    # 30 Epoch 시점의 가중치 (v3_complete)
+└── 5000장/
+    ├── cleaned_images_jpg.zip   # 2차 추가 확장 데이터셋
+    └── label_log.txt            # 2차 정답 장부
 """
 
 import os
