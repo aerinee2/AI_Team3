@@ -6,6 +6,11 @@ import numpy as np
 from PIL import Image, ImageEnhance
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 from peft import PeftModel
+"""
+[오픈소스 프레임워크 및 라이선스 출처 ]
+1. Backend Serving API: FastAPI (https://github.com/fastapi/fastapi)
+   - License: MIT License (FastAPI 및 Starlette, Pydantic 의존성 포함)
+"""
 
 # =====================================================================
 # [SafeEat Korea] 환경 설정 및 글로벌 모델 초기화
